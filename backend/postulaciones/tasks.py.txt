@@ -1,0 +1,45 @@
+from celery import shared_task
+import requests
+from django.conf import settings
+from django.utils import timezone
+from .models import Postulacion
+from usuarios.models import Usuario
+
+@shared_task
+def ejecutar_postulaciones(usuario_id):
+    try:
+        usuario = Usuario.objects.get(id=usuario_id)
+        
+        if not usuario.postulaciones_activas:
+            return {"error": "Postulaciones desactivadas"}
+        
+        url = f"https://api.adzuna.com/v1/api/jobs/{usuario.pais}/search/1"
+        params = {
+            "app_id": settings.ADZUNA_APP_ID,
+            "app_key": settings.ADZUNA_APP_KEY,
+            "results_per_page": 100,
+        }
+        
+        response = requests.get(url, params=params, timeout=30)
+        data = response.json()
+        ofertas = data.get("results", [])
+        
+        contador = 0
+        for oferta in ofertas[:100]:
+            _, created = Postulacion.objects.get_or_create(
+                usuario=usuario,
+                link=oferta.get("redirect_url", ""),
+                fecha_aplicacion=timezone.now().date(),
+                defaults={
+                    "titulo": oferta.get("title", "Sin título"),
+                    "empresa": oferta.get("company", {}).get("display_name", "Sin empresa"),
+                    "modalidad": oferta.get("contract_time", "No especificado"),
+                }
+            )
+            if created:
+                contador += 1
+        
+        return {"postulaciones_creadas": contador}
+        
+    except Exception as e:
+        return {"error": str(e)}
